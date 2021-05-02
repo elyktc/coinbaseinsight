@@ -1,0 +1,15 @@
+{
+  "name": "coinbaseinsight",
+  "version": "0.0.1",
+  "description": "Analyzes your crypto assets and compares current market values to the amount you've invested",
+  "author": "elyktc",
+  "license": "ISC",
+  "main": "index.js",
+  "dependencies": {
+    "axios": "^0.21.1"
+  },
+  "devDependencies": {},
+  "scripts": {
+    "start": "node index.js"
+  }
+}
