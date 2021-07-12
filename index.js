@@ -155,12 +155,20 @@ async function getTransactions() {
       );
       transactions.push(
         ...newTransactions.map((t) => {
+          const amount = t.amount.amount;
+          const code = t.amount.currency;
+          const usd = t.native_amount.amount;
+          const fee =
+            t.type === "buy" && code !== "USD" ? Math.max(usd * 0.015, 3) : 0;
+          const price = (usd - fee) / amount;
           return {
             id: t.id,
             type: t.type,
-            amount: t.amount.amount,
-            code: t.amount.currency,
-            usd: t.native_amount.amount,
+            amount: amount,
+            code: code,
+            usd: usd,
+            price: price,
+            fee: fee,
             date: t.created_at,
           };
         })
@@ -178,6 +186,8 @@ async function getTransactions() {
           amount: t.amount,
           code: t.code,
           usd: t.usd,
+          price: t.price,
+          fee: t.fee,
           date: t.date.replace(/[TZ]/g, " ").trim(),
         };
       })
@@ -205,22 +215,23 @@ async function getPrices() {
 }
 
 function isReward(transaction) {
-  return (
-    ["staking_reward", "inflation_reward"].includes(transaction.type) ||
-    (transaction.type === "send" && transaction.amount > 0)
-  );
+  return ["staking_reward", "inflation_reward"].includes(transaction.type);
 }
 
 function isSent(transaction) {
   return (
     !process.argv.includes("s") &&
     transaction.type === "send" &&
-    transaction.amount < 0
+    transaction.code !== "USD"
   );
 }
 
 function round(number) {
   return Math.round(number * 100) / 100;
+}
+
+function sum(numbers) {
+  return numbers.reduce((sum, n) => sum + n);
 }
 
 async function getSummary() {
@@ -231,7 +242,8 @@ async function getSummary() {
     const code = account.code;
     let amount = 0.0;
     let investedValue = 0.0;
-    for (let t of transactions.filter((t) => t.code === code && !isSent(t))) {
+    const txns = transactions.filter((t) => t.code === code && !isSent(t));
+    for (let t of txns) {
       amount += parseFloat(t.amount);
       investedValue += !isReward(t) ? parseFloat(t.usd) : 0;
     }
@@ -240,24 +252,56 @@ async function getSummary() {
     const valueDifference = round(currentValue - investedValue);
     const pctChangeValue = round((valueDifference / investedValue) * 100);
     const avgInvestPrice = investedValue / amount;
-    const priceDifference = currentPrice - avgInvestPrice;
-    const pctChangePrice = round((priceDifference / avgInvestPrice) * 100);
+    const lastBuy = txns.find((t) => t.type === "buy");
+    const lastSell = txns.find((t) => t.type === "sell");
+    const lastBuyPrice = lastBuy?.price;
+    const lastSellPrice = lastSell?.price;
+    const lastBuyDate = lastBuy?.date ?? 0;
+    const lastSellDate = lastSell?.date ?? 0;
+    const soldLast = new Date(lastBuyDate) - new Date(lastSellDate) < 0;
+    const lastBuyDifference = lastBuyPrice && currentPrice - lastBuyPrice;
+    const lastSellDifference = lastSellPrice && currentPrice - lastSellPrice;
+    const pctChangeLastBuy = !soldLast && lastBuyPrice
+      ? round((lastBuyDifference / lastBuyPrice) * 100)
+      : "";
+    const pctChangeLastSell = soldLast && lastSellPrice
+      ? round((lastSellDifference / lastSellPrice) * 100)
+      : "";
     const row = {
       name,
       code,
+      avgInvestPrice,
+      currentPrice,
+      lastBuyPrice,
+      pctChangeLastBuy,
+      lastSellPrice,
+      pctChangeLastSell,
       amount,
       currentValue,
       investedValue,
       valueDifference,
       pctChangeValue,
-      currentPrice,
-      avgInvestPrice,
-      pctChangePrice,
+      lastBuyDate,
+      lastSellDate,
     };
     rows.push(row);
   }
-  rows.sort((a, b) => b.valueDifference - a.valueDifference);
+  rows.sort((a, b) => b.pctChangeLastBuy - a.pctChangeLastBuy || a.pctChangeLastSell - b.pctChangeLastSell);
+  rows.push(getTotalsRow(rows));
   await saveCsv("summary", rows);
+}
+
+function getTotalsRow(rows) {
+  const investedValue = sum(rows.map((r) => r.investedValue));
+  const currentValue = sum(rows.map((r) => r.currentValue));
+  const valueDifference = currentValue - investedValue;
+  const pctChangeValue = round((valueDifference / investedValue) * 100);
+  return {
+    currentValue,
+    investedValue,
+    valueDifference,
+    pctChangeValue,
+  };
 }
 
 async function run() {
